@@ -97,15 +97,18 @@ def upload_pdf_via_gas(local_path, new_name, parent_folder_id):
     except Exception as e:
         print(f"Failed to upload {new_name}: {e}")
 
-# ★追加: 通知送信用の関数
-def send_notification_via_gas(status, folder_id):
+# ★変更: 引数に pdf_count を追加
+def send_notification_via_gas(status, folder_id, pdf_count=0):
     """GAS経由でSlack通知を送る"""
     gas_url = os.environ.get("GAS_UPLOAD_URL")
     token = os.environ.get("UPLOAD_TOKEN")
     
-    # YAMLで設定した環境変数から取得
     slack_channel = os.environ.get("SLACK_CHANNEL")
     slack_mention_users = os.environ.get("SLACK_MENTION_USERS")
+
+    # ★追加: 環境変数からリポジトリ情報などを取得
+    repo = os.environ.get("GITHUB_REPO", "unknown")
+    run_id = os.environ.get("GITHUB_RUN_ID", "unknown")
 
     if not gas_url or not token:
         print("Skipping notification: GAS_UPLOAD_URL or UPLOAD_TOKEN missing.")
@@ -113,11 +116,15 @@ def send_notification_via_gas(status, folder_id):
 
     payload = {
         "token": token,
-        # ファイルデータ(base64)を含めないと、GAS側は「通知モード」として処理する
-        "status": status,  # "success" or "failure"
+        "status": status,
         "folder_id": folder_id,
         "slack_channel": slack_channel,
-        "mention_users": slack_mention_users
+        "mention_users": slack_mention_users,
+        
+        # ★追加: GASに送るデータ
+        "pdf_count": pdf_count,
+        "repo": repo,
+        "run_id": run_id
     }
 
     print(f"Sending {status} notification to GAS...")
@@ -217,20 +224,18 @@ def main():
         print("Error: INPUT_FOLDER_ID is not set.")
         return
 
-    # 全体のステータス管理
     overall_status = "success"
+    pdf_count = 0  # ★追加: PDF数をカウントする変数
 
     try:
         work_dir = "./workspace"
         
-        # Driveからダウンロード
         service = get_drive_service()
         folder_map = {} 
         
         print(f"Start downloading from Folder ID: {input_folder_id}")
         download_folder_recursive(service, input_folder_id, work_dir, folder_map)
 
-        # emath用の環境変数を準備
         tex_env = get_tex_env()
 
         found_tex = False
@@ -243,32 +248,31 @@ def main():
                     found_tex = True
                     tex_path = pathlib.Path(root) / file
                     
-                    # コンパイル実行
                     if compile_tex_file(tex_path, tex_env):
                         pdf_name = tex_path.stem + ".pdf"
                         pdf_path = tex_path.parent / pdf_name
                         
                         if pdf_path.exists():
                             upload_pdf_via_gas(pdf_path, pdf_name, current_drive_id)
+                            pdf_count += 1  # ★追加: 成功したらカウントアップ
                         else:
                             print(f"PDF not found for {file}")
-                            overall_status = "failure" # PDFが見つからない場合も失敗扱い
+                            overall_status = "failure"
                     else:
-                        overall_status = "failure" # 1つでも失敗したら通知は失敗にする
+                        overall_status = "failure"
 
         if not found_tex:
             print("No .tex files found.")
-            # .texがないこと自体を通知したい場合はここを failure にしてもよい
     
     except Exception:
-        # スクリプト自体がクラッシュした場合
         print("Critial Error occurred in main process:")
         traceback.print_exc()
         overall_status = "failure"
     
     finally:
-        # ★成功・失敗に関わらず、最後に必ず通知を送る
-        send_notification_via_gas(overall_status, input_folder_id)
+        # ★変更: pdf_count を渡す
+        send_notification_via_gas(overall_status, input_folder_id, pdf_count)
 
 if __name__ == "__main__":
     main()
+
