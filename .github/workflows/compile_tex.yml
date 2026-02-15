@@ -1,11 +1,8 @@
 name: Compile LaTeX via GAS Trigger
 
 on:
-  # GAS から叩く用のトリガー
   repository_dispatch:
     types: [compile-tex]
-  
-  # 手動実行用（テスト用）
   workflow_dispatch:
     inputs:
       folderId:
@@ -14,7 +11,6 @@ on:
 
 jobs:
   compile:
-    # LaTeX環境済みコンテナを使用する（Job全体をコンテナ内で実行）
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/tkp-math/texlive-ja:latest
@@ -23,32 +19,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # コンテナ内のPython環境をセットアップ
-      # (コンテナにpipが入っていない場合に備えてインストール)
       - name: Install Python dependencies
         run: |
           apt-get update && apt-get install -y python3-pip
           python3 -m pip install --upgrade pip
-          # Google Drive API操作とGAS通信に必要なライブラリ
           pip3 install google-auth google-auth-oauthlib google-api-python-client requests tqdm
 
-      - name: Set up Google credentials
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-        run: |
-          echo "$GOOGLE_CREDENTIALS" > credentials.json
-
+      # ★変更点: ファイル作成(echo)を削除し、環境変数をセットするだけにします
       - name: Run LaTeX Compile and Upload
         env:
-          # GAS から repository_dispatch で渡されるパラメータ
-          # (手動実行の場合は inputs から取るようにフォールバック)
+          # Pythonが直接読み込む環境変数
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          
+          # 他の変数
           INPUT_FOLDER_ID: ${{ github.event.client_payload.input_folder_id || inputs.folderId }}
           OUTPUT_FOLDER_ID: ${{ github.event.client_payload.output_folder_id || inputs.folderId }}
-          
-          # GAS Web API の情報
           GAS_UPLOAD_URL: ${{ secrets.GAS_UPLOAD_URL }}
-          
-          # ★ここで先ほど設定した Secrets を環境変数 "UPLOAD_TOKEN" に入れる
           UPLOAD_TOKEN: ${{ secrets.TEX_FILE_UPLOAD_TOKEN }}
         run: |
-          python3 compile_all_tex.py
+          python3 scripts/compile_all_tex.py
