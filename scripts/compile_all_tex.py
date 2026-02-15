@@ -20,7 +20,6 @@ def get_drive_service():
     creds_json_str = os.environ.get("GOOGLE_CREDENTIALS")
     
     if not creds_json_str:
-        # ローカルテスト用（もしあれば）
         if os.path.exists("credentials.json"):
              creds = Credentials.from_service_account_file("credentials.json")
              return build("drive", "v3", credentials=creds)
@@ -39,8 +38,15 @@ def get_drive_service():
     )
     return build("drive", "v3", credentials=creds)
 
-def download_folder_recursive(service, folder_id, local_path):
-    """Driveの指定フォルダの中身を再帰的にダウンロード"""
+def download_folder_recursive(service, folder_id, local_path, folder_map):
+    """
+    Driveの指定フォルダの中身を再帰的にダウンロードし、
+    ローカルパスとフォルダIDの対応関係を folder_map に記録する
+    """
+    # ★重要: 絶対パスでマッピングを記録する
+    abs_local_path = os.path.abspath(local_path)
+    folder_map[abs_local_path] = folder_id
+
     if not os.path.exists(local_path):
         os.makedirs(local_path)
 
@@ -50,7 +56,7 @@ def download_folder_recursive(service, folder_id, local_path):
     ).execute()
     files = results.get("files", [])
 
-    print(f"Downloading contents to: {local_path}")
+    print(f"Downloading contents to: {local_path} (ID: {folder_id})")
     for file in tqdm(files, leave=False):
         file_id = file["id"]
         name = file["name"]
@@ -58,7 +64,8 @@ def download_folder_recursive(service, folder_id, local_path):
         dest_path = os.path.join(local_path, name)
 
         if mime_type == "application/vnd.google-apps.folder":
-            download_folder_recursive(service, file_id, dest_path)
+            # 再帰呼び出し時にも folder_map を渡す
+            download_folder_recursive(service, file_id, dest_path, folder_map)
         else:
             request = service.files().get_media(fileId=file_id)
             with io.FileIO(dest_path, "wb") as fh:
@@ -87,7 +94,7 @@ def upload_pdf_via_gas(local_path, new_name, parent_folder_id):
         "mimeType": "application/pdf",
     }
 
-    print(f"Uploading {new_name} to GAS...")
+    print(f"Uploading {new_name} to folder ID: {parent_folder_id} ...")
     try:
         res = requests.post(gas_url, json=payload, timeout=120)
         res.raise_for_status()
@@ -107,23 +114,15 @@ def delete_auxiliary_files(tex_path: pathlib.Path):
             file.unlink()
 
 def get_tex_env():
-    """
-    emathフォルダへのパスを含む環境変数を作成する
-    """
-    # このスクリプト(compile_all_tex.py)がある場所: .../scripts/
+    """emathフォルダへのパスを含む環境変数を作成する"""
     script_dir = pathlib.Path(__file__).parent.resolve()
-    # リポジトリのルート: .../compile-latex/
     repo_root = script_dir.parent
-    
-    # emathフォルダのパス: .../compile-latex/emath_tkp_ver1
     emath_dir = repo_root / "emath_tkp_ver1"
     
     env = os.environ.copy()
     
     if emath_dir.exists():
         print(f"Found emath directory: {emath_dir}")
-        # TEXINPUTS設定: . (カレント) : emath(再帰//) : システム標準
-        # 末尾の : を忘れると標準ライブラリが読めなくなるので注意
         env["TEXINPUTS"] = f".:{emath_dir.resolve()}//:"
     else:
         print(f"Warning: emath directory not found at {emath_dir}")
@@ -145,20 +144,20 @@ def compile_tex_file(tex_path: pathlib.Path, tex_env: dict):
 
         print(f"Compiling: {tex_filename}")
 
-        # uplatex 実行 (envを渡す)
+        # uplatex
         with open(log_name, "w") as f_log:
             subprocess.check_call(
                 ["uplatex", "-interaction=nonstopmode", tex_filename],
                 stdout=f_log, stderr=subprocess.STDOUT,
-                env=tex_env  # ★ここが重要
+                env=tex_env
             )
         
-        # dvipdfmx 実行 (envを渡す)
+        # dvipdfmx
         with open(log_name, "a") as f_log:
             subprocess.check_call(
                 ["dvipdfmx", tex_stem],
                 stdout=f_log, stderr=subprocess.STDOUT,
-                env=tex_env  # ★ここも重要
+                env=tex_env
             )
 
         print(f"Success: {tex_filename}")
@@ -173,8 +172,7 @@ def compile_tex_file(tex_path: pathlib.Path, tex_env: dict):
             try:
                 with open(log_name, "r", encoding="utf-8", errors="ignore") as f:
                     print(f.read())
-            except:
-                pass
+            except: pass
             print("================ [ERROR LOG END] ================")
         return False
     except Exception as e:
@@ -189,7 +187,8 @@ def compile_tex_file(tex_path: pathlib.Path, tex_env: dict):
 
 def main():
     input_folder_id = os.environ.get("INPUT_FOLDER_ID")
-    output_folder_id = os.environ.get("OUTPUT_FOLDER_ID", input_folder_id)
+    # 出力先指定がなければ入力と同じにする(ただし今回は個別のフォルダIDを優先する)
+    default_output_id = os.environ.get("OUTPUT_FOLDER_ID", input_folder_id)
 
     if not input_folder_id:
         print("Error: INPUT_FOLDER_ID is not set.")
@@ -197,35 +196,42 @@ def main():
 
     work_dir = "./workspace"
     
-    # Driveからダウンロード
+    # Driveからダウンロード & フォルダマップ作成
     try:
         service = get_drive_service()
     except Exception as e:
         print(f"Auth Error: {e}")
         return
 
+    # ★マップを初期化して渡す
+    folder_map = {} 
+    
     print(f"Start downloading from Folder ID: {input_folder_id}")
-    download_folder_recursive(service, input_folder_id, work_dir)
+    download_folder_recursive(service, input_folder_id, work_dir, folder_map)
 
     # emath用の環境変数を準備
     tex_env = get_tex_env()
 
-    # .texファイルを探してコンパイル
     found_tex = False
     for root, dirs, files in os.walk(work_dir):
+        # 現在のディレクトリに対応するDriveフォルダIDを取得
+        # マップには絶対パスで保存されているので、ここでも絶対パスに変換して検索
+        abs_root = os.path.abspath(root)
+        current_drive_id = folder_map.get(abs_root, default_output_id)
+
         for file in files:
             if file.endswith(".tex"):
                 found_tex = True
                 tex_path = pathlib.Path(root) / file
                 
-                # コンパイル実行 (tex_envを渡す)
+                # コンパイル実行
                 if compile_tex_file(tex_path, tex_env):
-                    # 成功したらアップロード
                     pdf_name = tex_path.stem + ".pdf"
                     pdf_path = tex_path.parent / pdf_name
                     
                     if pdf_path.exists():
-                        upload_pdf_via_gas(pdf_path, pdf_name, output_folder_id)
+                        # ★ここで「元あったフォルダID」を指定してアップロード
+                        upload_pdf_via_gas(pdf_path, pdf_name, current_drive_id)
                     else:
                         print(f"PDF not found for {file}")
 
