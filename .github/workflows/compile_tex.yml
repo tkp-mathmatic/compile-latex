@@ -51,4 +51,4 @@ jobs:
           # ★ここで先ほど設定した Secrets を環境変数 "UPLOAD_TOKEN" に入れる
           UPLOAD_TOKEN: ${{ secrets.TEX_FILE_UPLOAD_TOKEN }}
         run: |
-          python3 compile_all_tex.py
+          python3 scripts/compile_all_tex.py
