@@ -5,6 +5,7 @@ import base64
 import requests
 import subprocess
 import pathlib
+import json  # ★追加
 from tqdm import tqdm
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -15,11 +16,25 @@ from googleapiclient.http import MediaIoBaseDownload
 # ================================
 
 def get_drive_service():
-    """サービスアカウントでDrive APIクライアントを作成"""
-    credentials_file = "credentials.json"
-    # GitHub Actions側で作成されるファイルを読み込む
-    creds = Credentials.from_service_account_file(
-        credentials_file,
+    """環境変数からサービスアカウント情報を読み込んでDrive APIクライアントを作成"""
+    # GitHub ActionsのSecretsから渡された環境変数を取得
+    creds_json_str = os.environ.get("GOOGLE_CREDENTIALS")
+    
+    if not creds_json_str:
+        raise ValueError("環境変数 GOOGLE_CREDENTIALS が設定されていません。")
+
+    # JSON文字列を辞書オブジェクトに変換
+    try:
+        creds_dict = json.loads(creds_json_str)
+    except json.JSONDecodeError as e:
+        print(f"JSON Decode Error: {e}")
+        # デバッグ用: 安全のため最初の10文字だけ表示
+        print(f"Content snippet: {creds_json_str[:10]}...")
+        raise
+
+    # ファイルからではなく、辞書データから認証情報を生成
+    creds = Credentials.from_service_account_info(
+        creds_dict,
         scopes=["https://www.googleapis.com/auth/drive"]
     )
     return build("drive", "v3", credentials=creds)
@@ -59,7 +74,7 @@ def download_folder_recursive(service, folder_id, local_path):
 def upload_pdf_via_gas(local_path, new_name, parent_folder_id):
     """GAS Web API経由でPDFをアップロード"""
     gas_url = os.environ.get("GAS_UPLOAD_URL")
-    token = os.environ.get("UPLOAD_TOKEN") # YAMLで設定した名前
+    token = os.environ.get("UPLOAD_TOKEN") 
 
     if not gas_url or not token:
         print("Error: Environment variables for upload are missing.")
@@ -139,8 +154,13 @@ def main():
 
     work_dir = "./workspace"
     
-    # 1. Driveからソースコード一式をダウンロード
-    service = get_drive_service()
+    # 1. Driveからダウンロード (環境変数から直接認証)
+    try:
+        service = get_drive_service()
+    except Exception as e:
+        print(f"認証エラー: {e}")
+        return
+
     print(f"Start downloading from Folder ID: {input_folder_id}")
     download_folder_recursive(service, input_folder_id, work_dir)
 
