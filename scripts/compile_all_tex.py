@@ -112,31 +112,52 @@ def delete_auxiliary_files(tex_path: pathlib.Path):
 
 def compile_tex_file(tex_path: pathlib.Path):
     """uplatex -> dvipdfmx でコンパイル"""
-    tex_dir = tex_path.parent
-    cwd_before = os.getcwd()
-    os.chdir(tex_dir)
+    # 1. パス迷子を防ぐために、最初に「絶対パス」を取得する
+    abs_tex_path = tex_path.resolve()
+    tex_dir = abs_tex_path.parent
     
-    log_path = tex_dir / f"{tex_path.stem}_compile.log"
-
-    print(f"Compiling: {tex_path.name}")
+    cwd_before = os.getcwd()
+    
     try:
-        # 1. uplatex
-        subprocess.check_call(
-            ["uplatex", "-interaction=nonstopmode", tex_path.name],
-            stdout=open(log_path, "w"), stderr=subprocess.STDOUT
-        )
-        # 2. dvipdfmx
-        subprocess.check_call(
-            ["dvipdfmx", tex_path.stem],
-            stdout=open(log_path, "a"), stderr=subprocess.STDOUT
-        )
-        print(f"Success: {tex_path.name}")
-        delete_auxiliary_files(tex_path)
+        # 2. 対象のディレクトリに移動
+        os.chdir(tex_dir)
+        
+        # 3. ディレクトリ移動済みなので、ファイル名だけを使う
+        tex_filename = abs_tex_path.name     # 例: file.tex
+        tex_stem = abs_tex_path.stem         # 例: file
+        log_name = f"{tex_stem}_compile.log" # 例: file_compile.log
+
+        print(f"Compiling: {tex_filename}")
+
+        # uplatex 実行
+        with open(log_name, "w") as f_log:
+            subprocess.check_call(
+                ["uplatex", "-interaction=nonstopmode", tex_filename],
+                stdout=f_log, stderr=subprocess.STDOUT
+            )
+        
+        # dvipdfmx 実行
+        with open(log_name, "a") as f_log:
+            subprocess.check_call(
+                ["dvipdfmx", tex_stem],
+                stdout=f_log, stderr=subprocess.STDOUT
+            )
+
+        print(f"Success: {tex_filename}")
+        
+        # 補助ファイルの削除（ファイル名基準で行う）
+        delete_auxiliary_files(pathlib.Path(tex_filename))
+        
         return True
+
     except subprocess.CalledProcessError:
-        print(f"Failed: {tex_path.name}. Check log: {log_path}")
+        print(f"Failed: {abs_tex_path.name}. Check log inside {tex_dir}")
+        return False
+    except Exception as e:
+        print(f"Unexpected Error on {abs_tex_path.name}: {e}")
         return False
     finally:
+        # 元のディレクトリに戻る
         os.chdir(cwd_before)
 
 # ================================
@@ -188,3 +209,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
