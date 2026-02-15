@@ -25,16 +25,21 @@ jobs:
           python3 -m pip install --upgrade pip
           pip3 install google-auth google-auth-oauthlib google-api-python-client requests tqdm
 
-      # ★変更点: ファイル作成(echo)を削除し、環境変数をセットするだけにします
       - name: Run LaTeX Compile and Upload
         env:
           # Pythonが直接読み込む環境変数
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           
-          # 他の変数
+          # フォルダIDなど
           INPUT_FOLDER_ID: ${{ github.event.client_payload.input_folder_id || inputs.folderId }}
           OUTPUT_FOLDER_ID: ${{ github.event.client_payload.output_folder_id || inputs.folderId }}
+          
+          # GAS URL & トークン
           GAS_UPLOAD_URL: ${{ secrets.GAS_UPLOAD_URL }}
           UPLOAD_TOKEN: ${{ secrets.TEX_FILE_UPLOAD_TOKEN }}
+
+          # ★追加: Slack通知用の情報を環境変数にセット
+          SLACK_CHANNEL: ${{ github.event.client_payload.slack_channel }}
+          SLACK_MENTION_USERS: ${{ github.event.client_payload.slack_mention_users }}
         run: |
           python3 scripts/compile_all_tex.py
