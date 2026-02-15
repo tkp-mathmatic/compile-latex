@@ -1,55 +1,54 @@
-name: Compile LaTeX from Google Drive
+name: Compile LaTeX via GAS Trigger
 
 on:
+  # GAS から叩く用のトリガー
+  repository_dispatch:
+    types: [compile-tex]
+  
+  # 手動実行用（テスト用）
   workflow_dispatch:
     inputs:
       folderId:
-        description: 'Google Drive folder ID'
+        description: 'Target Folder ID'
         required: true
 
 jobs:
-  build:
+  compile:
+    # LaTeX環境済みコンテナを使用する（Job全体をコンテナ内で実行）
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/tkp-math/texlive-ja:latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # 作業ディレクトリの確認
-      - name: List workspace
-        run: ls -R $GITHUB_WORKSPACE
-
-      # ① rclone 用に secrets.RCLONE_CONFIG を設定
-      - name: Setup rclone config
+      # コンテナ内のPython環境をセットアップ
+      # (コンテナにpipが入っていない場合に備えてインストール)
+      - name: Install Python dependencies
         run: |
-          mkdir -p $GITHUB_WORKSPACE/.config/rclone
-          echo "${{ secrets.RCLONE_CONFIG }}" | base64 -d > $GITHUB_WORKSPACE/.config/rclone/rclone.conf
+          apt-get update && apt-get install -y python3-pip
+          python3 -m pip install --upgrade pip
+          # Google Drive API操作とGAS通信に必要なライブラリ
+          pip3 install google-auth google-auth-oauthlib google-api-python-client requests tqdm
 
-      # ② Docker コンテナ内で LaTeX コンパイル
-      - name: Run LaTeX compilation container
-        uses: addnab/docker-run-action@v3
-        with:
-          image: ghcr.io/tkp-math/texlive-ja:latest
-          options: --rm -v ${{ github.workspace }}/.config/rclone:/root/.config/rclone -v ${{ github.workspace }}:/github/workspace  # ← リポジトリ全体をマウント
-          run: |
-            set -e  # エラーで停止
+      - name: Set up Google credentials
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          echo "$GOOGLE_CREDENTIALS" > credentials.json
 
-            # 作業ディレクトリ
-            mkdir -p /workspace/latex_projects
-            cd /workspace/latex_projects
-
-            # ③ Google Drive からフォルダを同期
-            rclone sync --config /root/.config/rclone/rclone.conf \
-              --drive-root-folder-id "${{ github.event.inputs.folderId }}" googleDrive: .
-
-            # ④ Python 環境整備
-            python3 -m pip install --upgrade pip
-            pip3 install tqdm
-
-            # ⑤ 再帰的に .tex ファイルをコンパイル（uplatex + dvipdfmx）
-            python3 /github/workspace/scripts/compile_all_tex.py .
-
-            # ⑥ 完成した PDF を Google Drive にアップロード
-            rclone sync --config /root/.config/rclone/rclone.conf . \
-              --drive-root-folder-id "${{ github.event.inputs.folderId }}" googleDrive:
-          shell: sh
+      - name: Run LaTeX Compile and Upload
+        env:
+          # GAS から repository_dispatch で渡されるパラメータ
+          # (手動実行の場合は inputs から取るようにフォールバック)
+          INPUT_FOLDER_ID: ${{ github.event.client_payload.input_folder_id || inputs.folderId }}
+          OUTPUT_FOLDER_ID: ${{ github.event.client_payload.output_folder_id || inputs.folderId }}
+          
+          # GAS Web API の情報
+          GAS_UPLOAD_URL: ${{ secrets.GAS_UPLOAD_URL }}
+          
+          # ★ここで先ほど設定した Secrets を環境変数 "UPLOAD_TOKEN" に入れる
+          UPLOAD_TOKEN: ${{ secrets.TEX_FILE_UPLOAD_TOKEN }}
+        run: |
+          python3 compile_all_tex.py
