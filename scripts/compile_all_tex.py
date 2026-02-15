@@ -145,14 +145,25 @@ def compile_tex_file(tex_path: pathlib.Path):
 
         print(f"Success: {tex_filename}")
         
-        # 補助ファイルの削除（ファイル名基準で行う）
+        # 補助ファイルの削除
         delete_auxiliary_files(pathlib.Path(tex_filename))
-        
         return True
 
     except subprocess.CalledProcessError:
-        print(f"Failed: {abs_tex_path.name}. Check log inside {tex_dir}")
+        print(f"Failed: {abs_tex_path.name}")
+        
+        # ★追加: 失敗したらログファイルの中身を読み込んで表示する
+        if os.path.exists(log_name):
+            print("================ [ERROR LOG START] ================")
+            try:
+                with open(log_name, "r", encoding="utf-8", errors="ignore") as f:
+                    print(f.read())
+            except Exception as e:
+                print(f"Could not read log file: {e}")
+            print("================ [ERROR LOG END] ================")
+            
         return False
+        
     except Exception as e:
         print(f"Unexpected Error on {abs_tex_path.name}: {e}")
         return False
@@ -209,4 +220,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
