@@ -1,0 +1,23 @@
+% EMconj.sty
+%
+\ProvidesPackage{EMconj}[2025/07/29 v0.00]%
+%
+%   \kyouyaku<#1>#2
+%   \kyouyaku[#1]#2
+%       <#1> : 高さの修正値（増減する値）
+%       [#1] : 高さ
+%       #2   : 本体
+\def\kyouyaku@strut{\mathstrut}%
+\DeclareRobustCommand\kyouyaku{\@ifundefined{bm@style}{\kyou@yaku}{\bmconj}}%
+\def\kyou@yaku{\@ifnextchar<{\kyouyaku@}{\@kyouyaku}}
+\def\kyouyaku@<#1>#2{{\setbox0=\hbox{$#2$}\@tempdima=\ht0
+  \advance\@tempdima#1\ht0=\@tempdima
+  \ensuremath{\overline{\box0}}}}
+\def\@kyouyaku{\@ifnextchar[{\@@kyouyaku}{\@@kyouyaku[\kyouyaku@strut]}}
+\def\@@kyouyaku[#1]#2{\ensuremath{\overline{#1 #2}}}
+\def\kyouyakusturt#1{\def\kyouyaku@sturt{#1}}%
+\def\conjstrut#1{\def\kyouyaku@strut{#1}}%
+\def\conjugate{\kyouyaku}
+\def\conj{\kyouyaku}
+%
+\endinput

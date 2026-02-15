@@ -5,6 +5,7 @@ import base64
 import requests
 import subprocess
 import pathlib
+import json
 from tqdm import tqdm
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -15,19 +16,31 @@ from googleapiclient.http import MediaIoBaseDownload
 # ================================
 
 def get_drive_service():
-    """サービスアカウントでDrive APIクライアントを作成"""
-    credentials_file = "credentials.json"
-    # GitHub Actions側で作成されるファイルを読み込む
-    creds = Credentials.from_service_account_file(
-        credentials_file,
+    """環境変数からサービスアカウント情報を読み込んでDrive APIクライアントを作成"""
+    creds_json_str = os.environ.get("GOOGLE_CREDENTIALS")
+    
+    if not creds_json_str:
+        # ローカルテスト用（もしあれば）
+        if os.path.exists("credentials.json"):
+             creds = Credentials.from_service_account_file("credentials.json")
+             return build("drive", "v3", credentials=creds)
+        raise ValueError("環境変数 GOOGLE_CREDENTIALS が設定されていません。")
+
+    try:
+        creds_dict = json.loads(creds_json_str)
+    except json.JSONDecodeError as e:
+        print(f"JSON Decode Error: {e}")
+        print(f"Content snippet: {creds_json_str[:10]}...")
+        raise
+
+    creds = Credentials.from_service_account_info(
+        creds_dict,
         scopes=["https://www.googleapis.com/auth/drive"]
     )
     return build("drive", "v3", credentials=creds)
 
 def download_folder_recursive(service, folder_id, local_path):
-    """
-    Driveの指定フォルダの中身（サブフォルダ含む）を再帰的にダウンロードする
-    """
+    """Driveの指定フォルダの中身を再帰的にダウンロード"""
     if not os.path.exists(local_path):
         os.makedirs(local_path)
 
@@ -37,7 +50,7 @@ def download_folder_recursive(service, folder_id, local_path):
     ).execute()
     files = results.get("files", [])
 
-    print(f"Downloading folder contents: {local_path}")
+    print(f"Downloading contents to: {local_path}")
     for file in tqdm(files, leave=False):
         file_id = file["id"]
         name = file["name"]
@@ -45,10 +58,8 @@ def download_folder_recursive(service, folder_id, local_path):
         dest_path = os.path.join(local_path, name)
 
         if mime_type == "application/vnd.google-apps.folder":
-            # フォルダなら再帰呼び出し
             download_folder_recursive(service, file_id, dest_path)
         else:
-            # ファイルならダウンロード
             request = service.files().get_media(fileId=file_id)
             with io.FileIO(dest_path, "wb") as fh:
                 downloader = MediaIoBaseDownload(fh, request)
@@ -59,7 +70,7 @@ def download_folder_recursive(service, folder_id, local_path):
 def upload_pdf_via_gas(local_path, new_name, parent_folder_id):
     """GAS Web API経由でPDFをアップロード"""
     gas_url = os.environ.get("GAS_UPLOAD_URL")
-    token = os.environ.get("UPLOAD_TOKEN") # YAMLで設定した名前
+    token = os.environ.get("UPLOAD_TOKEN") 
 
     if not gas_url or not token:
         print("Error: Environment variables for upload are missing.")
@@ -95,31 +106,79 @@ def delete_auxiliary_files(tex_path: pathlib.Path):
         if file.exists():
             file.unlink()
 
-def compile_tex_file(tex_path: pathlib.Path):
-    """uplatex -> dvipdfmx でコンパイル"""
-    tex_dir = tex_path.parent
-    cwd_before = os.getcwd()
-    os.chdir(tex_dir)
+def get_tex_env():
+    """
+    emathフォルダへのパスを含む環境変数を作成する
+    """
+    # このスクリプト(compile_all_tex.py)がある場所: .../scripts/
+    script_dir = pathlib.Path(__file__).parent.resolve()
+    # リポジトリのルート: .../compile-latex/
+    repo_root = script_dir.parent
     
-    log_path = tex_dir / f"{tex_path.stem}_compile.log"
+    # emathフォルダのパス: .../compile-latex/emath_tkp_ver1
+    emath_dir = repo_root / "emath_tkp_ver1"
+    
+    env = os.environ.copy()
+    
+    if emath_dir.exists():
+        print(f"Found emath directory: {emath_dir}")
+        # TEXINPUTS設定: . (カレント) : emath(再帰//) : システム標準
+        # 末尾の : を忘れると標準ライブラリが読めなくなるので注意
+        env["TEXINPUTS"] = f".:{emath_dir.resolve()}//:"
+    else:
+        print(f"Warning: emath directory not found at {emath_dir}")
+        
+    return env
 
-    print(f"Compiling: {tex_path.name}")
+def compile_tex_file(tex_path: pathlib.Path, tex_env: dict):
+    """uplatex -> dvipdfmx でコンパイル"""
+    abs_tex_path = tex_path.resolve()
+    tex_dir = abs_tex_path.parent
+    cwd_before = os.getcwd()
+    
     try:
-        # 1. uplatex
-        subprocess.check_call(
-            ["uplatex", "-interaction=nonstopmode", tex_path.name],
-            stdout=open(log_path, "w"), stderr=subprocess.STDOUT
-        )
-        # 2. dvipdfmx
-        subprocess.check_call(
-            ["dvipdfmx", tex_path.stem],
-            stdout=open(log_path, "a"), stderr=subprocess.STDOUT
-        )
-        print(f"Success: {tex_path.name}")
-        delete_auxiliary_files(tex_path)
+        os.chdir(tex_dir)
+        
+        tex_filename = abs_tex_path.name
+        tex_stem = abs_tex_path.stem
+        log_name = f"{tex_stem}_compile.log"
+
+        print(f"Compiling: {tex_filename}")
+
+        # uplatex 実行 (envを渡す)
+        with open(log_name, "w") as f_log:
+            subprocess.check_call(
+                ["uplatex", "-interaction=nonstopmode", tex_filename],
+                stdout=f_log, stderr=subprocess.STDOUT,
+                env=tex_env  # ★ここが重要
+            )
+        
+        # dvipdfmx 実行 (envを渡す)
+        with open(log_name, "a") as f_log:
+            subprocess.check_call(
+                ["dvipdfmx", tex_stem],
+                stdout=f_log, stderr=subprocess.STDOUT,
+                env=tex_env  # ★ここも重要
+            )
+
+        print(f"Success: {tex_filename}")
+        delete_auxiliary_files(pathlib.Path(tex_filename))
         return True
+
     except subprocess.CalledProcessError:
-        print(f"Failed: {tex_path.name}. Check log: {log_path}")
+        print(f"Failed: {abs_tex_path.name}")
+        # エラーログ表示
+        if os.path.exists(log_name):
+            print("================ [ERROR LOG START] ================")
+            try:
+                with open(log_name, "r", encoding="utf-8", errors="ignore") as f:
+                    print(f.read())
+            except:
+                pass
+            print("================ [ERROR LOG END] ================")
+        return False
+    except Exception as e:
+        print(f"Unexpected Error on {abs_tex_path.name}: {e}")
         return False
     finally:
         os.chdir(cwd_before)
@@ -129,7 +188,6 @@ def compile_tex_file(tex_path: pathlib.Path):
 # ================================
 
 def main():
-    # 環境変数から設定を取得
     input_folder_id = os.environ.get("INPUT_FOLDER_ID")
     output_folder_id = os.environ.get("OUTPUT_FOLDER_ID", input_folder_id)
 
@@ -139,12 +197,20 @@ def main():
 
     work_dir = "./workspace"
     
-    # 1. Driveからソースコード一式をダウンロード
-    service = get_drive_service()
+    # Driveからダウンロード
+    try:
+        service = get_drive_service()
+    except Exception as e:
+        print(f"Auth Error: {e}")
+        return
+
     print(f"Start downloading from Folder ID: {input_folder_id}")
     download_folder_recursive(service, input_folder_id, work_dir)
 
-    # 2. .texファイルを探してコンパイル
+    # emath用の環境変数を準備
+    tex_env = get_tex_env()
+
+    # .texファイルを探してコンパイル
     found_tex = False
     for root, dirs, files in os.walk(work_dir):
         for file in files:
@@ -152,9 +218,9 @@ def main():
                 found_tex = True
                 tex_path = pathlib.Path(root) / file
                 
-                # コンパイル実行
-                if compile_tex_file(tex_path):
-                    # 成功したらPDFを探してアップロード
+                # コンパイル実行 (tex_envを渡す)
+                if compile_tex_file(tex_path, tex_env):
+                    # 成功したらアップロード
                     pdf_name = tex_path.stem + ".pdf"
                     pdf_path = tex_path.parent / pdf_name
                     

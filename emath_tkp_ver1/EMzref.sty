@@ -1,0 +1,33 @@
+% EMzref.sty
+%
+\RequirePackage[savepos]{zref}%
+%
+\newcounter{xp@s}%
+\def\initxpos{\@ifnextchar[{\@initxpos}{\@initxpos[\z@]}}%
+\def\@initxpos[#1]{%
+  \noindent
+  \zsavepos{Ltop}\mbox{　}\hfill\zsavepos{Rbottom}%
+  \edef\Rxsp{\zposx{Rbottom}}% 終点x座標
+  \@tempdima=-\baselineskip
+%  \vspace{-.75\baselineskip}\par
+%  \@tempdima=-.72\baselineskip
+  \ifdim #1=\z@\else\advance\@tempdima#1\fi
+%\typeout{@tempdima=\the\@tempdima}%
+  \vspace{\@tempdima}\par
+}%
+\def\getcurrentxpos#1{%
+  \refstepcounter{xp@s}%
+  \zsavepos{c@xpos\thexp@s}%
+  \EMedef#1{\zposx{c@xpos\thexp@s}}%
+  \ignorespaces
+}%
+\def\getcurrentPxy#1{%
+  \refstepcounter{xp@s}%
+  \zsavepos{c@xpos\thexp@s}%
+  \@tempdima=\zposx{c@xpos\thexp@s}sp\relax
+  \@tempdimb=\zposy{c@xpos\thexp@s}sp\relax
+  \edef#1{(\strip@pt\@tempdima,\strip@pt\@tempdimb)}%
+  \ignorespaces
+}%
+%\AtBeginDocument{\initxpos}%
+\endinput

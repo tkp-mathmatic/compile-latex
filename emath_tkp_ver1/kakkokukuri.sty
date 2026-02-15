@@ -1,0 +1,77 @@
+﻿% kakkokukuri.sty
+%
+%\def\kk{\@ifnextchar({\@ka}{\@kk}}%
+\DeclareRobustCommand\kk{\@ifnextchar({\@ka}{\@kk}}%
+\def\@kk{\@ifnextchar[{\@kc}{\@@kk}}%
+\def\@@kk{\@ifnextchar|{\@kd}{\@@@kk}}%
+\def\@@@kk#1{\ensuremath{\left\{#1\right\}}}%
+\def\@ka(#1){\ensuremath{\left(#1\right)}}%
+\def\@kc[#1]{\ensuremath{\left[#1\right]}}%
+\def\@kd|#1|{\ensuremath{\left|#1\right|}}%
+\let\KakkoKukuri\kk
+%
+\DeclareRobustCommand\kakkokukuri{%
+  \@ifnextchar[{\@kakkokukuri}{\@kakkokukuri[(]}}%
+\def\@kakkokukuri[#1]#2{%
+\ensuremath{%
+  \left#1#2%
+  \if (#1\relax
+    \right)
+  \else\if <#1\relax
+    \right>
+  \else\if [#1\relax
+    \right]
+  \else\if |#1\relax
+    \right |
+  \else\if \{#1\relax
+    \right\}
+  \fi\fi\fi\fi\fi
+}%
+}%
+
+%\def\jkakkokukuri{\@ifnextchar[{\@jkakkokukuri}{\@jkakkokukuri[（]}}%
+\DeclareRobustCommand\jkakkokukuri{%
+  \@ifnextchar[{\@jkakkokukuri}{\@jkakkokukuri[（]}}%
+\def\@jkakkokukuri[#1]#2{%
+  \leavevmode\inhibitglue #1#2%
+  \if 【#1\relax
+    】\inhibitglue
+  \else\if （#1\relax
+    ）\inhibitglue
+  \else\if ［#1\relax
+    ］\inhibitglue
+  \else\if ＜#1\relax
+    ＞\inhibitglue
+  \else\if 〔#1\relax
+    〕\inhibitglue
+  \else\if 〈#1\relax
+    〉\inhibitglue
+  \else\if 「#1\relax
+    」\inhibitglue
+  \else\if 『#1\relax
+    』\inhibitglue
+  \else\if 《#1\relax
+    》\inhibitglue
+  \else\if (#1\relax
+    )\relax
+  \fi\fi\fi\fi\fi\fi\fi\fi\fi\fi
+}%
+\DeclareRobustCommand\jLkakkokukuri[1]{\inhibitglue ［#1］\inhibitglue}
+%
+\DeclareRobustCommand\jkk{\@ifnextchar［{\@jka}{\@jkk}}%
+\def\@jkk{\@ifnextchar〔{\@jkb}{\@@jkk}}%
+\def\@@jkk{\@ifnextchar【{\@jkc}{\@@@jkk}}%
+\def\@jka ［#1］{\inhibitglue ［#1］\inhibitglue}%
+\def\@jkb 〔#1〕{\inhibitglue 〔#1〕\inhibitglue}%
+\def\@jkc【#1】{\inhibitglue 【#1】\inhibitglue}%
+%
+%
+\def\－－{―\kern-.5zw―\kern-.5zw―}
+\def\「{\inhibitglue「}
+\def\」{」\inhibitglue}
+\endinput
+%
+\def\ka#1{\ensuremath{\left(#1\right)}}%
+\def\kb#1{\ensuremath{\left\{#1\right\}}}%
+\def\kc#1{\ensuremath{\left[#1\right]}}%
+
