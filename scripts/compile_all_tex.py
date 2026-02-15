@@ -6,6 +6,7 @@ import requests
 import subprocess
 import pathlib
 import json
+import traceback # エラー詳細取得用
 from tqdm import tqdm
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -29,7 +30,6 @@ def get_drive_service():
         creds_dict = json.loads(creds_json_str)
     except json.JSONDecodeError as e:
         print(f"JSON Decode Error: {e}")
-        print(f"Content snippet: {creds_json_str[:10]}...")
         raise
 
     creds = Credentials.from_service_account_info(
@@ -39,11 +39,7 @@ def get_drive_service():
     return build("drive", "v3", credentials=creds)
 
 def download_folder_recursive(service, folder_id, local_path, folder_map):
-    """
-    Driveの指定フォルダの中身を再帰的にダウンロードし、
-    ローカルパスとフォルダIDの対応関係を folder_map に記録する
-    """
-    # ★重要: 絶対パスでマッピングを記録する
+    """Driveの指定フォルダの中身を再帰的にダウンロード"""
     abs_local_path = os.path.abspath(local_path)
     folder_map[abs_local_path] = folder_id
 
@@ -64,7 +60,6 @@ def download_folder_recursive(service, folder_id, local_path, folder_map):
         dest_path = os.path.join(local_path, name)
 
         if mime_type == "application/vnd.google-apps.folder":
-            # 再帰呼び出し時にも folder_map を渡す
             download_folder_recursive(service, file_id, dest_path, folder_map)
         else:
             request = service.files().get_media(fileId=file_id)
@@ -101,6 +96,35 @@ def upload_pdf_via_gas(local_path, new_name, parent_folder_id):
         print(f"GAS response: {res.json()}")
     except Exception as e:
         print(f"Failed to upload {new_name}: {e}")
+
+# ★追加: 通知送信用の関数
+def send_notification_via_gas(status, folder_id):
+    """GAS経由でSlack通知を送る"""
+    gas_url = os.environ.get("GAS_UPLOAD_URL")
+    token = os.environ.get("UPLOAD_TOKEN")
+    
+    # YAMLで設定した環境変数から取得
+    slack_channel = os.environ.get("SLACK_CHANNEL")
+    slack_mention_users = os.environ.get("SLACK_MENTION_USERS")
+
+    if not gas_url or not token:
+        print("Skipping notification: GAS_UPLOAD_URL or UPLOAD_TOKEN missing.")
+        return
+
+    payload = {
+        "token": token,
+        # ファイルデータ(base64)を含めないと、GAS側は「通知モード」として処理する
+        "status": status,  # "success" or "failure"
+        "folder_id": folder_id,
+        "slack_channel": slack_channel,
+        "mention_users": slack_mention_users
+    }
+
+    print(f"Sending {status} notification to GAS...")
+    try:
+        requests.post(gas_url, json=payload, timeout=30)
+    except Exception as e:
+        print(f"Failed to send notification: {e}")
 
 # ================================
 # 2. LaTeX Compile Logic
@@ -187,56 +211,64 @@ def compile_tex_file(tex_path: pathlib.Path, tex_env: dict):
 
 def main():
     input_folder_id = os.environ.get("INPUT_FOLDER_ID")
-    # 出力先指定がなければ入力と同じにする(ただし今回は個別のフォルダIDを優先する)
     default_output_id = os.environ.get("OUTPUT_FOLDER_ID", input_folder_id)
 
     if not input_folder_id:
         print("Error: INPUT_FOLDER_ID is not set.")
         return
 
-    work_dir = "./workspace"
-    
-    # Driveからダウンロード & フォルダマップ作成
+    # 全体のステータス管理
+    overall_status = "success"
+
     try:
+        work_dir = "./workspace"
+        
+        # Driveからダウンロード
         service = get_drive_service()
-    except Exception as e:
-        print(f"Auth Error: {e}")
-        return
+        folder_map = {} 
+        
+        print(f"Start downloading from Folder ID: {input_folder_id}")
+        download_folder_recursive(service, input_folder_id, work_dir, folder_map)
 
-    # ★マップを初期化して渡す
-    folder_map = {} 
-    
-    print(f"Start downloading from Folder ID: {input_folder_id}")
-    download_folder_recursive(service, input_folder_id, work_dir, folder_map)
+        # emath用の環境変数を準備
+        tex_env = get_tex_env()
 
-    # emath用の環境変数を準備
-    tex_env = get_tex_env()
+        found_tex = False
+        for root, dirs, files in os.walk(work_dir):
+            abs_root = os.path.abspath(root)
+            current_drive_id = folder_map.get(abs_root, default_output_id)
 
-    found_tex = False
-    for root, dirs, files in os.walk(work_dir):
-        # 現在のディレクトリに対応するDriveフォルダIDを取得
-        # マップには絶対パスで保存されているので、ここでも絶対パスに変換して検索
-        abs_root = os.path.abspath(root)
-        current_drive_id = folder_map.get(abs_root, default_output_id)
-
-        for file in files:
-            if file.endswith(".tex"):
-                found_tex = True
-                tex_path = pathlib.Path(root) / file
-                
-                # コンパイル実行
-                if compile_tex_file(tex_path, tex_env):
-                    pdf_name = tex_path.stem + ".pdf"
-                    pdf_path = tex_path.parent / pdf_name
+            for file in files:
+                if file.endswith(".tex"):
+                    found_tex = True
+                    tex_path = pathlib.Path(root) / file
                     
-                    if pdf_path.exists():
-                        # ★ここで「元あったフォルダID」を指定してアップロード
-                        upload_pdf_via_gas(pdf_path, pdf_name, current_drive_id)
+                    # コンパイル実行
+                    if compile_tex_file(tex_path, tex_env):
+                        pdf_name = tex_path.stem + ".pdf"
+                        pdf_path = tex_path.parent / pdf_name
+                        
+                        if pdf_path.exists():
+                            upload_pdf_via_gas(pdf_path, pdf_name, current_drive_id)
+                        else:
+                            print(f"PDF not found for {file}")
+                            overall_status = "failure" # PDFが見つからない場合も失敗扱い
                     else:
-                        print(f"PDF not found for {file}")
+                        overall_status = "failure" # 1つでも失敗したら通知は失敗にする
 
-    if not found_tex:
-        print("No .tex files found.")
+        if not found_tex:
+            print("No .tex files found.")
+            # .texがないこと自体を通知したい場合はここを failure にしてもよい
+    
+    except Exception:
+        # スクリプト自体がクラッシュした場合
+        print("Critial Error occurred in main process:")
+        traceback.print_exc()
+        overall_status = "failure"
+    
+    finally:
+        # ★成功・失敗に関わらず、最後に必ず通知を送る
+        send_notification_via_gas(overall_status, input_folder_id)
 
 if __name__ == "__main__":
     main()
