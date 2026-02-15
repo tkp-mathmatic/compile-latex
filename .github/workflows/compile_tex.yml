@@ -27,19 +27,18 @@ jobs:
 
       - name: Run LaTeX Compile and Upload
         env:
-          # Pythonが直接読み込む環境変数
+          # ... (既存の変数はそのまま) ...
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-          
-          # フォルダIDなど
           INPUT_FOLDER_ID: ${{ github.event.client_payload.input_folder_id || inputs.folderId }}
           OUTPUT_FOLDER_ID: ${{ github.event.client_payload.output_folder_id || inputs.folderId }}
-          
-          # GAS URL & トークン
           GAS_UPLOAD_URL: ${{ secrets.GAS_UPLOAD_URL }}
           UPLOAD_TOKEN: ${{ secrets.TEX_FILE_UPLOAD_TOKEN }}
-
-          # ★追加: Slack通知用の情報を環境変数にセット
           SLACK_CHANNEL: ${{ github.event.client_payload.slack_channel }}
           SLACK_MENTION_USERS: ${{ github.event.client_payload.slack_mention_users }}
+
+          # ★追加: リポジトリ情報と実行IDを渡す
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+
         run: |
           python3 scripts/compile_all_tex.py
