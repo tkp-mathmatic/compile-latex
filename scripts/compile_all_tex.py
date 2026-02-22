@@ -6,7 +6,7 @@ import requests
 import subprocess
 import pathlib
 import json
-import traceback # エラー詳細取得用
+import traceback
 from tqdm import tqdm
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -17,9 +17,7 @@ from googleapiclient.http import MediaIoBaseDownload
 # ================================
 
 def get_drive_service():
-    """環境変数からサービスアカウント情報を読み込んでDrive APIクライアントを作成"""
     creds_json_str = os.environ.get("GOOGLE_CREDENTIALS")
-    
     if not creds_json_str:
         if os.path.exists("credentials.json"):
              creds = Credentials.from_service_account_file("credentials.json")
@@ -39,7 +37,6 @@ def get_drive_service():
     return build("drive", "v3", credentials=creds)
 
 def download_folder_recursive(service, folder_id, local_path, folder_map):
-    """Driveの指定フォルダの中身を再帰的にダウンロード"""
     abs_local_path = os.path.abspath(local_path)
     folder_map[abs_local_path] = folder_id
 
@@ -69,8 +66,8 @@ def download_folder_recursive(service, folder_id, local_path, folder_map):
                 while not done:
                     status, done = downloader.next_chunk()
 
-def upload_pdf_via_gas(local_path, new_name, parent_folder_id):
-    """GAS Web API経由でPDFをアップロード"""
+# ★変更: PDF以外(ログ)もアップロードできるように汎用化
+def upload_file_via_gas(local_path, new_name, parent_folder_id, mime_type="application/pdf"):
     gas_url = os.environ.get("GAS_UPLOAD_URL")
     token = os.environ.get("UPLOAD_TOKEN") 
 
@@ -86,7 +83,7 @@ def upload_pdf_via_gas(local_path, new_name, parent_folder_id):
         "folderId": parent_folder_id,
         "fileName": new_name,
         "base64": b64,
-        "mimeType": "application/pdf",
+        "mimeType": mime_type, # ★引数で受け取る
     }
 
     print(f"Uploading {new_name} to folder ID: {parent_folder_id} ...")
@@ -97,16 +94,12 @@ def upload_pdf_via_gas(local_path, new_name, parent_folder_id):
     except Exception as e:
         print(f"Failed to upload {new_name}: {e}")
 
-# ★変更: 引数に pdf_count を追加
 def send_notification_via_gas(status, folder_id, pdf_count=0):
-    """GAS経由でSlack通知を送る"""
     gas_url = os.environ.get("GAS_UPLOAD_URL")
     token = os.environ.get("UPLOAD_TOKEN")
     
     slack_channel = os.environ.get("SLACK_CHANNEL")
     slack_mention_users = os.environ.get("SLACK_MENTION_USERS")
-
-    # ★追加: 環境変数からリポジトリ情報などを取得
     repo = os.environ.get("GITHUB_REPO", "unknown")
     run_id = os.environ.get("GITHUB_RUN_ID", "unknown")
 
@@ -120,8 +113,6 @@ def send_notification_via_gas(status, folder_id, pdf_count=0):
         "folder_id": folder_id,
         "slack_channel": slack_channel,
         "mention_users": slack_mention_users,
-        
-        # ★追加: GASに送るデータ
         "pdf_count": pdf_count,
         "repo": repo,
         "run_id": run_id
@@ -145,7 +136,6 @@ def delete_auxiliary_files(tex_path: pathlib.Path):
             file.unlink()
 
 def get_tex_env():
-    """emathフォルダへのパスを含む環境変数を作成する"""
     script_dir = pathlib.Path(__file__).parent.resolve()
     repo_root = script_dir.parent
     emath_dir = repo_root / "emath_tkp_ver1"
@@ -153,42 +143,40 @@ def get_tex_env():
     env = os.environ.copy()
     
     if emath_dir.exists():
-        print(f"Found emath directory: {emath_dir}")
         env["TEXINPUTS"] = f".:{emath_dir.resolve()}//:"
-    else:
-        print(f"Warning: emath directory not found at {emath_dir}")
-        
     return env
 
 def compile_tex_file(tex_path: pathlib.Path, tex_env: dict):
-    """uplatex -> dvipdfmx でコンパイル"""
     abs_tex_path = tex_path.resolve()
     tex_dir = abs_tex_path.parent
     cwd_before = os.getcwd()
     
     try:
         os.chdir(tex_dir)
-        
         tex_filename = abs_tex_path.name
         tex_stem = abs_tex_path.stem
         log_name = f"{tex_stem}_compile.log"
 
         print(f"Compiling: {tex_filename}")
 
-        # uplatex
+        # ★変更: uplatex を2回実行して相互参照を解決する
         with open(log_name, "w") as f_log:
             subprocess.check_call(
                 ["uplatex", "-interaction=nonstopmode", tex_filename],
-                stdout=f_log, stderr=subprocess.STDOUT,
-                env=tex_env
+                stdout=f_log, stderr=subprocess.STDOUT, env=tex_env
+            )
+        
+        with open(log_name, "a") as f_log:
+            subprocess.check_call(
+                ["uplatex", "-interaction=nonstopmode", tex_filename],
+                stdout=f_log, stderr=subprocess.STDOUT, env=tex_env
             )
         
         # dvipdfmx
         with open(log_name, "a") as f_log:
             subprocess.check_call(
                 ["dvipdfmx", tex_stem],
-                stdout=f_log, stderr=subprocess.STDOUT,
-                env=tex_env
+                stdout=f_log, stderr=subprocess.STDOUT, env=tex_env
             )
 
         print(f"Success: {tex_filename}")
@@ -197,14 +185,6 @@ def compile_tex_file(tex_path: pathlib.Path, tex_env: dict):
 
     except subprocess.CalledProcessError:
         print(f"Failed: {abs_tex_path.name}")
-        # エラーログ表示
-        if os.path.exists(log_name):
-            print("================ [ERROR LOG START] ================")
-            try:
-                with open(log_name, "r", encoding="utf-8", errors="ignore") as f:
-                    print(f.read())
-            except: pass
-            print("================ [ERROR LOG END] ================")
         return False
     except Exception as e:
         print(f"Unexpected Error on {abs_tex_path.name}: {e}")
@@ -225,11 +205,10 @@ def main():
         return
 
     overall_status = "success"
-    pdf_count = 0  # ★追加: PDF数をカウントする変数
+    pdf_count = 0
 
     try:
         work_dir = "./workspace"
-        
         service = get_drive_service()
         folder_map = {} 
         
@@ -237,8 +216,8 @@ def main():
         download_folder_recursive(service, input_folder_id, work_dir, folder_map)
 
         tex_env = get_tex_env()
-
         found_tex = False
+
         for root, dirs, files in os.walk(work_dir):
             abs_root = os.path.abspath(root)
             current_drive_id = folder_map.get(abs_root, default_output_id)
@@ -248,18 +227,27 @@ def main():
                     found_tex = True
                     tex_path = pathlib.Path(root) / file
                     
+                    # コンパイル実行
                     if compile_tex_file(tex_path, tex_env):
+                        # ★成功時: PDFをアップロード
                         pdf_name = tex_path.stem + ".pdf"
                         pdf_path = tex_path.parent / pdf_name
                         
                         if pdf_path.exists():
-                            upload_pdf_via_gas(pdf_path, pdf_name, current_drive_id)
-                            pdf_count += 1  # ★追加: 成功したらカウントアップ
+                            upload_file_via_gas(pdf_path, pdf_name, current_drive_id, "application/pdf")
+                            pdf_count += 1
                         else:
                             print(f"PDF not found for {file}")
                             overall_status = "failure"
                     else:
                         overall_status = "failure"
+                        
+                        # ★失敗時: ログファイルを Drive にアップロード
+                        log_name = tex_path.stem + "_compile.log"
+                        log_path = tex_path.parent / log_name
+                        if log_path.exists():
+                            print(f"Uploading ERROR LOG for {file}")
+                            upload_file_via_gas(log_path, log_name, current_drive_id, "text/plain")
 
         if not found_tex:
             print("No .tex files found.")
@@ -270,9 +258,7 @@ def main():
         overall_status = "failure"
     
     finally:
-        # ★変更: pdf_count を渡す
         send_notification_via_gas(overall_status, input_folder_id, pdf_count)
 
 if __name__ == "__main__":
     main()
-
