@@ -246,10 +246,10 @@ def main():
                         else:
                             print(f"PDF not found for {file}")
                             overall_status = "failure"
-                            failed_files.append(file) # ★失敗リストに追加
+                            failed_files.append({"name": file, "id": current_drive_id}) # ★失敗リストに追加
                     else:
                         overall_status = "failure"
-                        failed_files.append(file) # ★失敗リストに追加
+                        failed_files.append({"name": file, "id": current_drive_id}) # ★失敗リストに追加
                         
                         log_name = tex_path.stem + "_compile.log"
                         log_path = tex_path.parent / log_name
@@ -264,7 +264,7 @@ def main():
         print("Critial Error occurred in main process:")
         traceback.print_exc()
         overall_status = "failure"
-        failed_files.append("システムエラー(ダウンロード失敗等)")
+        failed_files.append({"name": "システムエラー(ダウンロード失敗等)", "id": input_folder_id})
     
     finally:
         # ★引数を増やして通知を送信
